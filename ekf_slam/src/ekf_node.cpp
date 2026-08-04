@@ -113,13 +113,13 @@ public:
     pub_imu_latency_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/imu_latency_ms", 10);
 
     // 10 Hz - Lento, per non ricaricare la mappa continuamente
-    timer_map_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.1), [this]() { this->publishMap(); });
+    timer_map_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.2), [this]() { this->publishMap(); });
     
     // 50 Hz - Veloce, fluido e costante per il 3D di Foxglove (sganciato dai microscatti dell'IMU)
-    timer_odom_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.02), [this]() { this->publishOdometry(); });
+    // timer_odom_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.02), [this]() { this->publishOdometry(); });
     
     // 20 Hz - Medio, sufficiente per vedere la scia del Path senza distruggere la rete
-    timer_path_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.05), [this]() { this->publishPath(); });
+    // timer_path_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.2), [this]() { this->publishPath(); });
 
     first_odom_ = true;
     RCLCPP_INFO(this->get_logger(), "EKF Node pulito e avviato.");
@@ -154,8 +154,8 @@ private:
   // 2. CALLBACK: IMU
   // =====================================================================
   void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-      auto start_time = std::chrono::high_resolution_clock::now();
       std::lock_guard<std::mutex> lock(ekf_mutex_);
+      auto start_time = std::chrono::high_resolution_clock::now();
 
       rclcpp::Time now(msg->header.stamp, this->get_clock()->get_clock_type());
       if (first_odom_) { last_update_time_ = now; first_odom_ = false; return; }
@@ -165,12 +165,9 @@ private:
       ImuRecord imu_rec;
       imu_rec.stamp = now;
 
-      double ax_raw = msg->linear_acceleration.x;
-      double ay_raw = msg->linear_acceleration.y;
-      
-      imu_rec.ax = ax_raw * std::cos(imu_yaw_offset) - ay_raw * std::sin(imu_yaw_offset);
-      imu_rec.ay = ax_raw * std::sin(imu_yaw_offset) + ay_raw * std::cos(imu_yaw_offset);
-      
+      // Passaggio dei dati crudi della bag (offset rimosso)
+      imu_rec.ax = msg->linear_acceleration.x;
+      imu_rec.ay = msg->linear_acceleration.y;
       imu_rec.gyro_z = msg->angular_velocity.z;
       imu_rec.dt = dt;
       imu_buffer_.push_back(imu_rec);
@@ -191,7 +188,9 @@ private:
       }
 
       last_update_time_ = now;
-    //   publishOdometry(now);
+      
+      // RICHIAMO SINCRONO COME NEL COMMIT ORIGINALE!
+      publishOdometry(now);
 
       auto end_time = std::chrono::high_resolution_clock::now();
       auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count();
@@ -214,8 +213,12 @@ private:
   // 3. LOGICA CORE UNIFICATA EKF (Rewind, Update, Replay)
   // (Tipo di start_time corretto in std::chrono invece di auto)
   // =====================================================================
-  void processConesCore(const std::vector<Point2D>& perceived_cones, rclcpp::Time lidar_time, std::chrono::time_point<std::chrono::high_resolution_clock> start_time) {
+  void processConesCore(const std::vector<Point2D>& perceived_cones, rclcpp::Time lidar_time) {
+      // 1. PRIMA blocchiamo la memoria
       std::lock_guard<std::mutex> lock(ekf_mutex_);
+      
+      // 2. DOPO facciamo partire il cronometro (Misuriamo la matematica pura!)
+      auto start_time = std::chrono::high_resolution_clock::now();
       
       if (first_odom_ || state_buffer_.empty()) return; 
 
@@ -297,15 +300,13 @@ private:
   // 4. PARSER: SIMULATORE (PacSim)
   // =====================================================================
   void conesCallbackSim(const pacsim::msg::PerceptionDetections::SharedPtr msg) {
-      auto start_time = std::chrono::high_resolution_clock::now();
-      
       std::vector<Point2D> extracted_cones;
       for (const auto& perceived_cone : msg->detections) {
           extracted_cones.push_back({perceived_cone.pose.pose.position.x, perceived_cone.pose.pose.position.y});
       }
 
       rclcpp::Time lidar_time(msg->header.stamp, this->get_clock()->get_clock_type());
-      processConesCore(extracted_cones, lidar_time, start_time);
+      processConesCore(extracted_cones, lidar_time); // START_TIME RIMOSSO
   }
 
 
@@ -313,8 +314,6 @@ private:
   // 5. PARSER: PERCEZIONE REALE (Rosbag / Vettura)
   // =====================================================================
   void conesCallbackReal(const visualization_msgs::msg::MarkerArray::SharedPtr msg) {
-      auto start_time = std::chrono::high_resolution_clock::now();
-      
       if (msg->markers.empty()) return;
 
       std::vector<Point2D> extracted_cones;
@@ -324,7 +323,7 @@ private:
       }
 
       rclcpp::Time lidar_time(msg->markers[0].header.stamp, this->get_clock()->get_clock_type());
-      processConesCore(extracted_cones, lidar_time, start_time);
+      processConesCore(extracted_cones, lidar_time); // START_TIME RIMOSSO
   }
 
 
@@ -352,20 +351,12 @@ private:
       RCLCPP_INFO(this->get_logger(), "Mappa globale acquisita con successo! Totale coni: %zu", global_map_.size());
   }
 
-  void publishOdometry() {
-      Eigen::VectorXd state;
-      Eigen::MatrixXd P;
-      rclcpp::Time stamp;
+void publishOdometry(rclcpp::Time stamp) {
+      // NESSUN LOCK QUI! (Lo possiede già la imuCallback, quindi siamo blindati e sicuri al 100%)
+      if (first_odom_) return;
       
-      // Estrazione sicura: blocchiamo l'EKF giusto un microsecondo per copiare i dati
-      {
-          std::lock_guard<std::mutex> lock(ekf_mutex_);
-          if (first_odom_) return;
-          state = ekf_->getState();
-          P = ekf_->getCovariance();
-          // Usiamo il tempo dell'ultimo aggiornamento IMU per una coerenza temporale perfetta della TF
-          stamp = last_update_time_; 
-      }
+      Eigen::VectorXd state = ekf_->getState();
+      Eigen::MatrixXd P = ekf_->getCovariance();
 
       nav_msgs::msg::Odometry odom;
       odom.header.stamp = stamp;
@@ -382,11 +373,9 @@ private:
       odom.pose.covariance[0]  = P(0,0);
       odom.pose.covariance[1]  = P(0,1);
       odom.pose.covariance[5]  = P(0,2);
-      
       odom.pose.covariance[6]  = P(1,0);
       odom.pose.covariance[7]  = P(1,1);
       odom.pose.covariance[11] = P(1,2);
-      
       odom.pose.covariance[30] = P(2,0);
       odom.pose.covariance[31] = P(2,1);
       odom.pose.covariance[35] = P(2,2);
@@ -404,38 +393,57 @@ private:
       t.transform.rotation = odom.pose.pose.orientation; 
 
       tf_broadcaster_->sendTransform(t);
-  }
 
-  void publishPath() {
-      Eigen::VectorXd state;
-      rclcpp::Time stamp = this->now();
-      
-      {
-          std::lock_guard<std::mutex> lock(ekf_mutex_);
-          if (first_odom_) return;
-          state = ekf_->getState();
-      }
+      // --- LOGICA PATH INTEGRATA (Come nel commit originale) ---
+      path_msg_.header.stamp = stamp;
+      path_msg_.header.frame_id = "map";
 
-      // Estraiamo la posa corrente dallo stato
       geometry_msgs::msg::PoseStamped current_pose;
       current_pose.header.stamp = stamp;
       current_pose.header.frame_id = "map";
-      current_pose.pose.position.x = state(0);
-      current_pose.pose.position.y = state(1);
-      current_pose.pose.orientation.z = std::sin(state(2) * 0.5);
-      current_pose.pose.orientation.w = std::cos(state(2) * 0.5);
+      current_pose.pose = odom.pose.pose;
 
-      path_msg_.header.stamp = stamp;
-      path_msg_.header.frame_id = "map";
       path_msg_.poses.push_back(current_pose);
 
-      // Manteniamo il limite rigido per non saturare la rete
+      // Limite rigido per non saturare Foxglove (nel commit originale era commentato, qui lo teniamo attivo per fluidità)
       if (path_msg_.poses.size() > 1000) {
           path_msg_.poses.erase(path_msg_.poses.begin());
       }
 
       pub_path_->publish(path_msg_);
   }
+
+// void publishPath() {
+//       Eigen::VectorXd state;
+//       rclcpp::Time stamp = this->now();
+      
+//       // RIMESSO IL LOCK! Indispensabile perché siamo in un timer separato.
+//       {
+//           std::lock_guard<std::mutex> lock(ekf_mutex_);
+//           if (first_odom_) return;
+//           state = ekf_->getState();
+//       }
+
+//       // Estraiamo la posa corrente dallo stato
+//       geometry_msgs::msg::PoseStamped current_pose;
+//       current_pose.header.stamp = stamp;
+//       current_pose.header.frame_id = "map";
+//       current_pose.pose.position.x = state(0);
+//       current_pose.pose.position.y = state(1);
+//       current_pose.pose.orientation.z = std::sin(state(2) * 0.5);
+//       current_pose.pose.orientation.w = std::cos(state(2) * 0.5);
+
+//       path_msg_.header.stamp = stamp;
+//       path_msg_.header.frame_id = "map";
+//       path_msg_.poses.push_back(current_pose);
+
+//       // Manteniamo il limite rigido per non saturare la rete
+//       if (path_msg_.poses.size() > 500) {
+//           path_msg_.poses.erase(path_msg_.poses.begin());
+//       }
+
+//       pub_path_->publish(path_msg_);
+//   }
 
   void publishMap() {
       Eigen::VectorXd state;
