@@ -43,8 +43,7 @@ class TFToPoseNode(Node):
         
         # --- Variabili di stato (Posa) ---
         self.sample_count = 0
-        self.sum_sq_x = 0.0
-        self.sum_sq_y = 0.0
+        self.sum_sq_ate = 0.0      # Sostituisce sum_sq_x e sum_sq_y
         self.sum_sq_theta = 0.0
         self.gt_map_points = []
         
@@ -82,8 +81,12 @@ class TFToPoseNode(Node):
             # Ricerca istantanea su 'car' (che coincide col cog!)
             t = self.tf_buffer.lookup_transform('map', 'car', rclpy.time.Time())
             
+            # Calcolo degli errori separati
             error_x = msg.pose.pose.position.x - t.transform.translation.x
             error_y = msg.pose.pose.position.y - t.transform.translation.y
+            
+            # Calcolo ATE (Distanza Euclidea)
+            ate = math.hypot(error_x, error_y)
             
             yaw_ekf = 2.0 * math.atan2(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
             yaw_true = 2.0 * math.atan2(t.transform.rotation.z, t.transform.rotation.w)
@@ -92,17 +95,17 @@ class TFToPoseNode(Node):
             error_theta_rad = math.atan2(math.sin(raw_diff), math.cos(raw_diff))
             error_theta_deg = math.degrees(error_theta_rad)
             
-            error_msg = Point(x=error_x, y=error_y, z=error_theta_deg)
+            # Impacchettiamo ATE su X e Theta su Z (lasciamo Y a 0)
+            error_msg = Point(x=ate, y=0.0, z=error_theta_deg)
             self.pub_error.publish(error_msg)
             
             self.sample_count += 1
-            self.sum_sq_x += error_x**2
-            self.sum_sq_y += error_y**2
+            self.sum_sq_ate += ate**2
             self.sum_sq_theta += error_theta_deg**2
             
             rmse_msg = Point(
-                x=math.sqrt(self.sum_sq_x / self.sample_count),
-                y=math.sqrt(self.sum_sq_y / self.sample_count),
+                x=math.sqrt(self.sum_sq_ate / self.sample_count),
+                y=0.0,
                 z=math.sqrt(self.sum_sq_theta / self.sample_count)
             )
             self.pub_rmse.publish(rmse_msg)

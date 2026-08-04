@@ -4,13 +4,22 @@
 
 EKFPose::EKFPose() {
     x_ = Eigen::VectorXd::Zero(6);
-    P_ = Eigen::MatrixXd::Identity(6, 6) * 0.01;
+    Eigen::VectorXd p0_diag(6);
+    
+    p0_diag(0) = 1e-6;  // X: Certezza assoluta dell'origine
+    p0_diag(1) = 1e-6;  // Y: Certezza assoluta dell'origine
+    p0_diag(2) = 1e-6;  // Yaw: Certezza assoluta dell'allineamento iniziale
+    p0_diag(3) = 1e-5;  // vx: Vettura ferma
+    p0_diag(4) = 1e-5;  // vy: Vettura ferma
+    p0_diag(5) = 0.05;  // b_w: Alta incertezza, lascia che il filtro stimi il bias dell'IMU
+    
+    P_ = p0_diag.asDiagonal();
     Q_ = Eigen::MatrixXd::Identity(6, 6) * 0.01;
     R_ = Eigen::MatrixXd::Identity(2, 2) * 0.01;
 }   
 
-void EKFPose::setProcessNoise(double nv, double nvy, double nw, double nlx, double nly) {
-    Q_.diagonal() << 1e-4, 1e-4, 1e-4, nv*nv, nvy*nvy, nw*nw;
+void EKFPose::setProcessNoise(double x, double y, double yaw, double nv, double nvy, double nw, double nlx, double nly) {
+    Q_.diagonal() << x*x, y*y, yaw*yaw, nv*nv, nvy*nvy, nw*nw;
     R_.diagonal() << nlx*nlx, nly*nly; 
 }
 
