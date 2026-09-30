@@ -12,18 +12,17 @@
     map_topic: "/ekf/map_cones"
 
     # --- Tuning "Aggressivo" (Forza la correzione) ---
-    process_noise_x: 0.001
-    process_noise_y: 0.001      
-    process_noise_yaw: 0.01
-    process_noise_v: 0.1
-    process_noise_vy: 0.2
-    process_noise_omega: 0.3
-    
-    lidar_noise_x: 0.05
-    lidar_noise_y: 0.05
+    process_noise_x: 0.0
+    process_noise_y: 0.0     
+    process_noise_yaw: 0.0
+    process_noise_v: 0.005
+    process_noise_vy: 0.005
+    process_noise_omega: 0.0005    
+    lidar_noise_x: 0.1
+    lidar_noise_y: 0.1
     
     association_threshold: 9.21
-    max_distance: 15.0
+    max_distance: 40.0
 
     # Calibrazione
     imu_yaw_offset: 0.0

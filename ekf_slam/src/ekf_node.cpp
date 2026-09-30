@@ -104,8 +104,11 @@ public:
 
     // Sottoscrizione alla mappa globale (Ground Truth)
     sub_map_ = this->create_subscription<pacsim::msg::Track>("/pacsim/track/landmarks", 10, std::bind(&EKFPoseNode::mapCallback, this, std::placeholders::_1));
+    sub_vel_ = this->create_subscription<geometry_msgs::msg::TwistWithCovarianceStamped>("/pacsim/velocity", 10, std::bind(&EKFPoseNode::velCallback, this, std::placeholders::_1));
     pub_pose_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("/ekf_pose_only", 10);
     pub_odom_ = this->create_publisher<nav_msgs::msg::Odometry>("/ekf/odometry", 10);
+    pub_vel_x_error_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/error_vx", 10);
+    pub_vel_y_error_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/error_vy", 10);
     pub_path_ = this->create_publisher<nav_msgs::msg::Path>("/ekf/trajectory", 10);
     pub_map_ = this->create_publisher<visualization_msgs::msg::MarkerArray>("/ekf/map_cones", 10);
     pub_map_rmse_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/map_rmse", 10);
@@ -367,6 +370,9 @@ void publishOdometry(rclcpp::Time stamp) {
       odom.pose.pose.position.y = state(1);
       odom.pose.pose.orientation.z = std::sin(state(2) * 0.5);
       odom.pose.pose.orientation.w = std::cos(state(2) * 0.5);
+      odom.twist.twist.linear.x = state(3);
+      odom.twist.twist.linear.y = state(4);
+      odom.twist.twist.angular.z = state(5);
 
       odom.pose.covariance.fill(0.0);
       
@@ -379,6 +385,8 @@ void publishOdometry(rclcpp::Time stamp) {
       odom.pose.covariance[30] = P(2,0);
       odom.pose.covariance[31] = P(2,1);
       odom.pose.covariance[35] = P(2,2);
+      odom.twist.covariance[0] = P(3,3); 
+      odom.twist.covariance[7] = P(4,4);
 
       pub_odom_->publish(odom);
 
@@ -413,6 +421,37 @@ void publishOdometry(rclcpp::Time stamp) {
       pub_path_->publish(path_msg_);
   }
 
+// =====================================================================
+  // PARSER: GROUND TRUTH VELOCITY E CALCOLO ERRORE
+  // =====================================================================
+void velCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr msg) {
+      if (first_odom_) return; // Evita calcoli prima che l'EKF sia inizializzato
+
+      // 1. Lettura della velocità reale dal simulatore
+      double real_vx = msg->twist.twist.linear.x;
+      double real_vy = msg->twist.twist.linear.y;
+      
+      // 2. Estrazione sicura della velocità stimata dallo stato
+      Eigen::VectorXd state;
+      {
+          std::lock_guard<std::mutex> lock(ekf_mutex_);
+          state = ekf_->getState();
+      }
+      double estimated_vx = state(3);
+      double estimated_vy = state(4);
+      
+      // 3. Calcolo dell'errore assoluto (scarto in m/s)
+      std_msgs::msg::Float64 err_vx_msg;
+      std_msgs::msg::Float64 err_vy_msg;
+      
+      err_vx_msg.data = std::abs(real_vx - estimated_vx);
+      err_vy_msg.data = std::abs(real_vy - estimated_vy);
+      
+      // 4. Pubblicazione
+      pub_vel_x_error_->publish(err_vx_msg);
+      pub_vel_y_error_->publish(err_vy_msg);
+  }
+  
 // void publishPath() {
 //       Eigen::VectorXd state;
 //       rclcpp::Time stamp = this->now();
@@ -479,8 +518,8 @@ void publishOdometry(rclcpp::Time stamp) {
           marker.scale.y = 0.2;
           marker.scale.z = 0.3;
           
-          marker.color.r = 0.0f;
-          marker.color.g = 1.0f;
+          marker.color.r = 1.0f;
+          marker.color.g = 0.5f; // Abbassando a 0.4 diventa più rossiccio, alzando a 0.6 più dorato
           marker.color.b = 0.0f;
           marker.color.a = 1.0f;
           
@@ -507,6 +546,8 @@ void publishOdometry(rclcpp::Time stamp) {
   rclcpp::Subscription<visualization_msgs::msg::MarkerArray>::SharedPtr sub_cones_real_;
   
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub_pose_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_vel_x_error_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_vel_y_error_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr pub_path_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_map_rmse_;
