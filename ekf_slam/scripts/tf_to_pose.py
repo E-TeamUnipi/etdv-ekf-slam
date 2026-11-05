@@ -77,6 +77,10 @@ class TFToPoseNode(Node):
         self.pub_map_rmse.publish(Float64(data=float(rmse_val)))
 
     def ekf_callback(self, msg):
+
+        if self.sample_count == 0 and abs(msg.twist.twist.linear.x) < 0.05:
+            return
+        
         try:
             # Ricerca istantanea su 'car' (che coincide col cog!)
             t = self.tf_buffer.lookup_transform('map', 'car', rclpy.time.Time())

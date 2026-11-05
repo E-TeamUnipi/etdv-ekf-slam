@@ -14,15 +14,15 @@
     # --- Tuning "Aggressivo" (Forza la correzione) ---
     process_noise_x: 0.0
     process_noise_y: 0.0     
-    process_noise_yaw: 0.0
+    process_noise_yaw: 0.005
     process_noise_v: 0.005
     process_noise_vy: 0.005
-    process_noise_omega: 0.0005    
+    process_noise_omega: 0.00001    
     lidar_noise_x: 0.1
     lidar_noise_y: 0.1
     
     association_threshold: 9.21
-    max_distance: 40.0
+    max_distance: 25.0
 
     # Calibrazione
     imu_yaw_offset: 0.0

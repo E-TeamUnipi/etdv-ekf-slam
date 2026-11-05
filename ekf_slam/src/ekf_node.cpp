@@ -114,9 +114,10 @@ public:
     pub_map_rmse_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/map_rmse", 10);
     pub_latency_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/latency_ms", 10);
     pub_imu_latency_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/imu_latency_ms", 10);
+    pub_bias_omega_ = this->create_publisher<std_msgs::msg::Float64>("/ekf/bias_omega", 10);
 
     // 10 Hz - Lento, per non ricaricare la mappa continuamente
-    timer_map_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.2), [this]() { this->publishMap(); });
+    timer_map_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.5), [this]() { this->publishMap(); });
     
     // 50 Hz - Veloce, fluido e costante per il 3D di Foxglove (sganciato dai microscatti dell'IMU)
     // timer_odom_ = rclcpp::create_timer(this, this->get_clock(), rclcpp::Duration::from_seconds(0.02), [this]() { this->publishOdometry(); });
@@ -390,6 +391,12 @@ void publishOdometry(rclcpp::Time stamp) {
 
       pub_odom_->publish(odom);
 
+      // --- NUOVO: Estrazione e pubblicazione del Bias del Giroscopio ---
+      std_msgs::msg::Float64 bias_msg;
+      bias_msg.data = state(5);
+      pub_bias_omega_->publish(bias_msg);
+      // -----------------------------------------------------------------
+
       geometry_msgs::msg::TransformStamped t;
       t.header.stamp = stamp;
       t.header.frame_id = "map";
@@ -514,12 +521,12 @@ void velCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr
           
           marker.pose.orientation.w = 1.0;
 
-          marker.scale.x = 0.2;
-          marker.scale.y = 0.2;
-          marker.scale.z = 0.3;
+          marker.scale.x = 0.4;
+          marker.scale.y = 0.4;
+          marker.scale.z = 0.6;
           
           marker.color.r = 1.0f;
-          marker.color.g = 0.5f; // Abbassando a 0.4 diventa più rossiccio, alzando a 0.6 più dorato
+          marker.color.g = 0.4f; // Abbassando a 0.4 diventa più rossiccio, alzando a 0.6 più dorato
           marker.color.b = 0.0f;
           marker.color.a = 1.0f;
           
@@ -553,6 +560,7 @@ void velCallback(const geometry_msgs::msg::TwistWithCovarianceStamped::SharedPtr
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_map_rmse_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_latency_;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_imu_latency_;
+  rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr pub_bias_omega_;
   
   nav_msgs::msg::Path path_msg_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_map_;
